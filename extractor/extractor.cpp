@@ -64,7 +64,25 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <unordered_map>
 #include <vector>
 
-int extractor::run(const ExtractorConfig &extractor_config)
+/**
+ * TODO: Refactor this function into smaller functions for better readability.
+ *
+ * This function is the entry point for the whole extraction process. The goal of the extraction
+ * step is to filter and convert the OSM geometry to something more fitting for routing.
+ * That includes:
+ *  - extracting turn restrictions
+ *  - splitting ways into (directional!) edge segments
+ *  - checking if nodes are barriers or traffic signal
+ *  - discarding all tag information: All relevant type information for nodes/ways
+ *    is extracted at this point.
+ *
+ * The result of this process are the following files:
+ *  .names : Names of all streets, stored as long consecutive string with prefix sum based index
+ *  .osrm  : Nodes and edges in a intermediate format that easy to digest for osrm-prepare
+ *  .restrictions : Turn restrictions that are used my osrm-prepare to construct the edge-expanded graph
+ *
+ */
+int extractor::run()
 {
     try
     {
@@ -73,24 +91,20 @@ int extractor::run(const ExtractorConfig &extractor_config)
 
         const unsigned recommended_num_threads = tbb::task_scheduler_init::default_num_threads();
         const auto number_of_threads =
-            std::min(recommended_num_threads, extractor_config.requested_num_threads);
+            std::min(recommended_num_threads, config.requested_num_threads);
         tbb::task_scheduler_init init(number_of_threads);
 
-        SimpleLogger().Write() << "Input file: " << extractor_config.input_path.filename().string();
-        SimpleLogger().Write() << "Profile: " << extractor_config.profile_path.filename().string();
+        SimpleLogger().Write() << "Input file: " << config.input_path.filename().string();
+        SimpleLogger().Write() << "Profile: " << config.profile_path.filename().string();
         SimpleLogger().Write() << "Threads: " << number_of_threads;
 
         // setup scripting environment
-        ScriptingEnvironment scripting_environment(extractor_config.profile_path.string().c_str());
-
-        std::unordered_map<std::string, NodeID> string_map;
-        string_map[""] = 0;
+        ScriptingEnvironment scripting_environment(config.profile_path.string().c_str());
 
         ExtractionContainers extraction_containers;
-        auto extractor_callbacks =
-            osrm::make_unique<ExtractorCallbacks>(extraction_containers, string_map);
+        auto extractor_callbacks = osrm::make_unique<ExtractorCallbacks>(extraction_containers);
 
-        const osmium::io::File input_file(extractor_config.input_path.string());
+        const osmium::io::File input_file(config.input_path.string());
         osmium::io::Reader reader(input_file);
         const osmium::io::Header header = reader.header();
 
@@ -117,7 +131,7 @@ int extractor::run(const ExtractorConfig &extractor_config)
         }
         SimpleLogger().Write() << "timestamp: " << timestamp;
 
-        boost::filesystem::ofstream timestamp_out(extractor_config.timestamp_file_name);
+        boost::filesystem::ofstream timestamp_out(config.timestamp_file_name);
         timestamp_out.write(timestamp.c_str(), timestamp.length());
         timestamp_out.close();
 
@@ -222,12 +236,13 @@ int extractor::run(const ExtractorConfig &extractor_config)
             return 1;
         }
 
-        extraction_containers.PrepareData(extractor_config.output_file_name,
-                                          extractor_config.restriction_file_name);
+        extraction_containers.PrepareData(config.output_file_name,
+                                          config.restriction_file_name,
+                                          config.names_file_name);
         TIMER_STOP(extracting);
         SimpleLogger().Write() << "extraction finished after " << TIMER_SEC(extracting) << "s";
         SimpleLogger().Write() << "To prepare the data for routing, run: "
-                               << "./osrm-prepare " << extractor_config.output_file_name
+                               << "./osrm-prepare " << config.output_file_name
                                << std::endl;
     }
     catch (std::exception &e)
